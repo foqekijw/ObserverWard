@@ -55,11 +55,10 @@ def analyze_with_gemini(model: GenerativeModel,
                        screenshot: Image.Image, 
                        config: AppConfig,
                        style_prompt: Optional[str] = None, 
-                       history: Optional[List[Dict]] = None) -> Optional[str]:
+                       history: Optional[List[Dict]] = None,
+                       user_message: Optional[str] = None) -> Optional[str]:
     """
     Sends image to Gemini and gets a comment.
-    
-    NOTE: history parameter is ignored (was causing repetitive messages)
     """
     try:
         buf = BytesIO()
@@ -76,8 +75,8 @@ def analyze_with_gemini(model: GenerativeModel,
             
         full_prompt = f"{style_prompt}\n\n{user_text}" if style_prompt else user_text
         
-        # REMOVED: History context was causing AI to repeat itself
-        # Each screenshot should get fresh, independent commentary
+        if user_message:
+            full_prompt += f"\n\n[USER MESSAGE]: {user_message}\n(Please answer the user's message while also considering the context of the screen and the persona)"
 
         contents = [
             {
@@ -94,8 +93,6 @@ def analyze_with_gemini(model: GenerativeModel,
             "max_output_tokens": config.max_output_tokens
         }
         
-        # Check for response_modalities support (runtime check simplified)
-        # In a real scenario, we might want to check `inspect.signature` again or just try/except
         try:
             response = model.generate_content(
                 contents,
@@ -103,7 +100,6 @@ def analyze_with_gemini(model: GenerativeModel,
             )
             return response.text
         except Exception as e:
-            # Fallback or re-raise to be caught by with_retry
             raise e
             
     except Exception as e:

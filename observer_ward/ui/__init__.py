@@ -3,7 +3,7 @@ Observer Ward UI Package
 
 Main entry point for the new UI system with single Live context.
 """
-from typing import Dict, Tuple, Optional, Any
+from typing import Dict, Tuple, Optional, Any, List
 from rich.console import Console
 
 from .core import UIController, UIContext, SelectionData, SettingsData, UIState
@@ -76,9 +76,34 @@ def run_ui_selection(
     return None, result.selected_interval
 
 
+def run_chat_ui(history: List[Dict[str, str]] = None) -> Optional[str]:
+    """
+    Run UI in chat mode.
+    
+    Args:
+        history: List of history entries to display
+        
+    Returns:
+        User message string if confirmed, None otherwise.
+    """
+    console = Console(emoji=False, force_terminal=True, color_system="truecolor")
+    controller = UIController(console)
+    
+    # Transition to chat immediately with history
+    controller.transition_to_chat(history)
+    
+    result = controller.run()
+    
+    if result.state == UIState.CONFIRMED:
+        return result.user_message
+        
+    return None
+
+
 # Export main entry point and key classes
 __all__ = [
     'run_ui_selection',
+    'run_chat_ui',
     'UIController',
     'UIContext',
 ]

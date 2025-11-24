@@ -19,12 +19,12 @@ except ImportError:
 from observer_ward.config import AppConfig
 from observer_ward.metrics import METRICS
 from observer_ward.utils import setup_logging, save_error_screenshot
-from observer_ward.screenshot import Screenshotter # Changed import
+from observer_ward.screenshot import Screenshotter
 from observer_ward.hashing import DETECTOR
 from observer_ward.api import init_apis, analyze_with_gemini, with_retry
 
 # Import new UI system
-from observer_ward.ui import run_ui_selection
+from observer_ward.ui import run_ui_selection, run_chat_ui
 
 try:
     from commentator_styles import STYLES as ALL_STYLES, list_styles
@@ -40,8 +40,9 @@ CONFIG_FILE = Path(__file__).parent / "config.json"
 # Console for application output
 console = Console(emoji=False, force_terminal=True, color_system="truecolor")
 
-# Global pause flag for menu access
+# Global pause flags
 pause_for_menu = threading.Event()
+pause_for_chat = threading.Event()
 
 
 def setup_keyboard_listener():
@@ -59,13 +60,14 @@ def setup_keyboard_listener():
             except AttributeError:
                 pass
             
-            # Check for M key (English and Russian)
+            # Check for M and C keys
             try:
                 if hasattr(key, 'char') and key.char:
                     char_lower = key.char.lower()
-                    # 'm' in English or 'ь' in Russian layout
                     if char_lower in ('m', 'ь'):
                         pause_for_menu.set()
+                    elif char_lower in ('c', 'с'): # English C and Russian S
+                        pause_for_chat.set()
             except AttributeError:
                 pass
         
@@ -111,14 +113,14 @@ def save_history(history: List[Dict[str, str]]) -> None:
         logging.error(f"Failed to save history: {e}")
 
 
-def sleep_until_next(iteration_start: float, interval_seconds: float, event: threading.Event = None) -> bool:
+def sleep_until_next(iteration_start: float, interval_seconds: float, events: List[threading.Event] = None) -> bool:
     """
-    Sleep until the next iteration should begin, interruptible by event.
+    Sleep until the next iteration should begin, interruptible by events.
     
     Args:
         iteration_start: Monotonic timestamp when the iteration started.
         interval_seconds: Target interval between iterations.
-        event: Optional threading event to interrupt sleep.
+        events: Optional list of threading events to interrupt sleep.
         
     Returns:
         True if interrupted by event, False if timeout completed.
@@ -126,8 +128,15 @@ def sleep_until_next(iteration_start: float, interval_seconds: float, event: thr
     elapsed = time.monotonic() - iteration_start
     sleep_time = max(0, interval_seconds - elapsed)
     if sleep_time > 0:
-        if event:
-            return event.wait(sleep_time)
+        if events:
+            # Check events periodically to allow interruption
+            start_sleep = time.monotonic()
+            while time.monotonic() - start_sleep < sleep_time:
+                for event in events:
+                    if event.is_set():
+                        return True
+                time.sleep(0.05)
+            return False
         else:
             time.sleep(sleep_time)
             return False
@@ -196,7 +205,7 @@ def main() -> None:
     console.print(f"\n[green]Selected Style:[/green] {style_name}")
     console.print(f"[green]Interval:[/green] {interval}s")
     if has_menu_hotkey:
-        console.print("[dim]Press M or F1 to open menu  |  Press Ctrl+C to stop[/dim]\n")
+        console.print("[dim]Press M to open menu  |  Press C to chat  |  Ctrl+C to stop[/dim]\n")
     else:
         console.print("[dim]Press Ctrl+C to stop[/dim]\n")
     
@@ -211,12 +220,10 @@ def main() -> None:
 
     try:
         while True:
-            # Check for menu request at start of loop
+            # Check for menu request
             if pause_for_menu.is_set():
                 pause_for_menu.clear()
                 console.print("\n[cyan]═══ Menu Paused ═══[/cyan]\n")
-                
-                # Show UI again
                 new_selection = run_ui_selection(menu_styles, config)
                 if new_selection:
                     new_style, new_interval = new_selection
@@ -225,12 +232,50 @@ def main() -> None:
                         style_prompt = ALL_STYLES.get(style_key, "")
                         STYLE_MANAGER.record_usage(style_key)
                         console.print(f"[green]✓ Style changed to:[/green] {style_name}")
-                    
                     if new_interval and new_interval != interval:
                         interval = new_interval
                         config.interval_seconds = interval
                         config.save(CONFIG_FILE)
                         console.print(f"[green]✓ Interval changed to:[/green] {interval}s")
+                console.print("[cyan]═══ Resumed ═══[/cyan]\n")
+                
+            # Check for chat request
+            if pause_for_chat.is_set():
+                pause_for_chat.clear()
+                console.print("\n[cyan]═══ Chat Paused ═══[/cyan]\n")
+                
+                # Pass history to chat UI
+                user_message = run_chat_ui(history)
+                
+                if user_message:
+                    console.print(f"\n[bold green]You:[/bold green] {user_message}")
+                    console.print("[dim]Analyzing screen with your message...[/dim]")
+                    
+                    # Take fresh screenshot for chat context
+                    chat_screenshot = screenshotter.take_screenshot(
+                        monitor_index=config.screenshot_monitor_index,
+                        width=config.screenshot_width,
+                        height=config.screenshot_height
+                    )
+                    
+                    if chat_screenshot:
+                        comment = with_retry(
+                            lambda: analyze_with_gemini(
+                                model,
+                                chat_screenshot,
+                                config,
+                                style_prompt=style_prompt,
+                                history=history,
+                                user_message=user_message
+                            ),
+                            config
+                        )
+                        
+                        if comment:
+                            display_comment(comment, datetime.now().strftime("%H:%M:%S"), is_cached=False)
+                            DETECTOR.cache_set(comment, config.cache_ttl_seconds, config.disable_cache)
+                            history.append({"timestamp": datetime.now().strftime("%H:%M:%S"), "comment": comment})
+                            save_history(history)
                 
                 console.print("[cyan]═══ Resumed ═══[/cyan]\n")
             
@@ -247,8 +292,8 @@ def main() -> None:
             t1 = time.monotonic()
             
             if not screenshot:
-                if sleep_until_next(iteration_start, config.interval_seconds, pause_for_menu):
-                    continue # Interrupted by menu
+                if sleep_until_next(iteration_start, config.interval_seconds, [pause_for_menu, pause_for_chat]):
+                    continue
                 continue
 
             # Profiling: Hashing
@@ -264,16 +309,16 @@ def main() -> None:
                  logging.info(f"Perf: Screenshot={screenshot_time:.1f}ms, Hash={hash_time:.1f}ms")
 
             if decision == "skip":
-                if sleep_until_next(iteration_start, config.interval_seconds, pause_for_menu):
-                    continue # Interrupted by menu
+                if sleep_until_next(iteration_start, config.interval_seconds, [pause_for_menu, pause_for_chat]):
+                    continue
                 continue
 
             if decision == "use_cache":
                 cached = DETECTOR.cache_get(config.disable_cache)
                 if cached:
                     display_comment(cached, now_str, is_cached=True)
-                    if sleep_until_next(iteration_start, config.interval_seconds, pause_for_menu):
-                        continue # Interrupted by menu
+                    if sleep_until_next(iteration_start, config.interval_seconds, [pause_for_menu, pause_for_chat]):
+                        continue
                     continue
 
             if decision == "call":
@@ -301,8 +346,8 @@ def main() -> None:
                     save_history(history)
 
             # Sleep at end of loop
-            if sleep_until_next(iteration_start, config.interval_seconds, pause_for_menu):
-                continue # Interrupted by menu
+            if sleep_until_next(iteration_start, config.interval_seconds, [pause_for_menu, pause_for_chat]):
+                continue
             
     except KeyboardInterrupt:
         console.print("\n[yellow]Stopped by user (Ctrl+C)[/yellow]")

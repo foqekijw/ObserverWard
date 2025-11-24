@@ -16,7 +16,38 @@ class UIState(Enum):
     CONFIRMATION = "confirmation"
     CONFIRMED = "confirmed"
     CANCELLED = "cancelled"
+    TEXT_INPUT = "text_input"
 
+
+@dataclass
+class TextInputData:
+    """Data for text input screen (Chat)"""
+    prompt: str = "Enter message"
+    current_value: str = ""
+    cursor_position: int = 0
+    history: List[str] = field(default_factory=list)
+    
+    def insert_char(self, char: str):
+        self.current_value = (
+            self.current_value[:self.cursor_position] +
+            char +
+            self.current_value[self.cursor_position:]
+        )
+        self.cursor_position += 1
+    
+    def backspace(self):
+        if self.cursor_position > 0:
+            self.current_value = (
+                self.current_value[:self.cursor_position - 1] +
+                self.current_value[self.cursor_position:]
+            )
+            self.cursor_position -= 1
+    
+    def move_cursor_left(self):
+        self.cursor_position = max(0, self.cursor_position - 1)
+    
+    def move_cursor_right(self):
+        self.cursor_position = min(len(self.current_value), self.cursor_position + 1)
 
 
 @dataclass
@@ -163,6 +194,7 @@ class UIContext:
     style_manager_data: Optional[StyleManagerData] = None
     style_editor_data: Optional[StyleEditorData] = None
     confirmation_data: Optional[ConfirmationData] = None
+    text_input_data: Optional[TextInputData] = None
     
     # Style key mapping: {numeric_key: actual_style_name}
     style_key_mapping: Dict[str, str] = field(default_factory=dict)
@@ -170,3 +202,4 @@ class UIContext:
     # Results
     selected_style: Optional[Tuple[str, str]] = None  # (name, key)
     selected_interval: int = 15
+    user_message: Optional[str] = None # Store user message here

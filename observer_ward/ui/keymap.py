@@ -84,7 +84,8 @@ class KeyMap:
     @staticmethod
     def is_printable(key: str) -> bool:
         """Check if key is a printable character"""
-        return len(key) == 1 and key.isprintable() and not key in (' ', '\t', '\n', '\r')
+        # Allow space!
+        return len(key) == 1 and key.isprintable() and not key in ('\t', '\n', '\r')
     
     @staticmethod
     def is_copy(key: str) -> bool:

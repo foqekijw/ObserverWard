@@ -80,7 +80,7 @@ class UIController:
     
     def _render_current_screen(self):
         """Delegate rendering to appropriate screen"""
-        from ..screens import style_selection, settings, number_input, style_manager, style_editor, confirmation
+        from ..screens import style_selection, settings, number_input, style_manager, style_editor, confirmation, text_input
         
         if self.context.state == UIState.STYLE_SELECTION:
             return style_selection.render(self.context)
@@ -101,6 +101,9 @@ class UIController:
         
         elif self.context.state == UIState.NUMBER_INPUT:
             return number_input.render(self.context)
+            
+        elif self.context.state == UIState.TEXT_INPUT:
+            return text_input.render(self.context)
         
         else:
             from rich.text import Text
@@ -131,6 +134,57 @@ class UIController:
         
         elif self.context.state == UIState.NUMBER_INPUT:
             self._handle_number_input_keys(key)
+            
+        elif self.context.state == UIState.TEXT_INPUT:
+            self._handle_text_input_keys(key)
+
+    # ... (existing handlers) ...
+
+    def _handle_text_input_keys(self, key: str):
+        """Handle keys in text input screen"""
+        data = self.context.text_input_data
+        if not data:
+            return
+            
+        if KeyMap.is_enter(key):
+            # Confirm message
+            self.context.user_message = data.current_value
+            self.context.state = UIState.CONFIRMED
+            
+        elif key == KeyMap.ESC_KEY:
+            # Cancel
+            self.context.state = UIState.CANCELLED
+            
+        elif key == KeyMap.BACKSPACE_KEY:
+            data.backspace()
+            
+        elif KeyMap.is_left(key):
+            data.move_cursor_left()
+            
+        elif KeyMap.is_right(key):
+            data.move_cursor_right()
+            
+        elif KeyMap.is_printable(key):
+            data.insert_char(key)
+
+    def transition_to_chat(self, history: list = None):
+        """Transition directly to chat input"""
+        from .state import TextInputData
+        
+        # Format history for display
+        display_history = []
+        if history:
+            # Take last 5 messages
+            for entry in history[-5:]:
+                timestamp = entry.get("timestamp", "")
+                comment = entry.get("comment", "")
+                display_history.append(f"[{timestamp}] AI: {comment}")
+        
+        self.context.text_input_data = TextInputData(
+            prompt="Type your message...",
+            history=display_history
+        )
+        self.context.state = UIState.TEXT_INPUT
     
     def _handle_style_selection_keys(self, key: str):
         """Handle keys in style selection screen"""
