@@ -20,7 +20,7 @@ def init_apis(config: AppConfig) -> Optional[GenerativeModel]:
     try:
         os.environ["GEMINI_API_KEY"] = gem_key
         model = GenerativeModel(config.gemini_model)
-        print(f"✓ Gemini Vision ({config.gemini_model}) connected")
+        print(f"[OK] Gemini Vision ({config.gemini_model}) connected")
         return model
     except Exception as e:
         print(f"Gemini API Error: {e}")

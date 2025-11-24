@@ -37,27 +37,40 @@ class UIController:
         Returns:
             UIContext with results
         """
+        import time
+        
         # Create single Live context
         self.live = Live(
             console=self.console,
-            refresh_per_second=30,
+            auto_refresh=False, # Disable background thread
             screen=True,
             transient=False
         )
         
         self._running = True
+        needs_redraw = True
         
         with self.live:
             while self._running and self.context.state not in (UIState.CONFIRMED, UIState.CANCELLED):
-                # Render current screen
-                renderable = self._render_current_screen()
-                self.live.update(renderable)
+                loop_start = time.monotonic()
                 
-                # Get event (non-blocking, ~33ms timeout for 30fps)
-                event = self.dispatcher.get_event(timeout=0.033)
+                # Render current screen only if needed
+                if needs_redraw:
+                    renderable = self._render_current_screen()
+                    self.live.update(renderable, refresh=True) # Manual refresh
+                    needs_redraw = False
+                
+                # Get event (non-blocking)
+                event = self.dispatcher.get_event(timeout=0.0)
                 
                 if event:
                     self._handle_event(event)
+                    needs_redraw = True
+                
+                # Sleep to maintain ~30 FPS
+                elapsed = time.monotonic() - loop_start
+                sleep_time = max(0, 0.033 - elapsed)
+                time.sleep(sleep_time)
         
         return self.context
     

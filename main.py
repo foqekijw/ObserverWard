@@ -1,11 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
-"""
-AI-Commentator Screen
-Main entry point for the AI Commentator application with refactored UI system.
-"""
-
 import sys
 import time
 import json
@@ -24,7 +16,6 @@ except ImportError:
     print("dotenv not found, please install dependencies.")
 
 # Import modules
-# ... (imports remain the same)
 from observer_ward.config import AppConfig
 from observer_ward.metrics import METRICS
 from observer_ward.utils import setup_logging, save_error_screenshot
@@ -32,7 +23,136 @@ from observer_ward.screenshot import Screenshotter # Changed import
 from observer_ward.hashing import DETECTOR
 from observer_ward.api import init_apis, analyze_with_gemini, with_retry
 
-# ... (rest of imports and constants)
+# Import new UI system
+from observer_ward.ui import run_ui_selection
+
+try:
+    from commentator_styles import STYLES as ALL_STYLES, list_styles
+except ImportError:
+    print("commentator_styles.py not found! Styles unavailable.")
+    ALL_STYLES = {}
+    list_styles = lambda: []
+
+# Constants
+HISTORY_FILE = Path(__file__).parent.resolve() / ".ai_commentator_history.json"
+CONFIG_FILE = Path(__file__).parent / "config.json"
+
+# Console for application output
+console = Console(emoji=False, force_terminal=True, color_system="truecolor")
+
+# Global pause flag for menu access
+pause_for_menu = threading.Event()
+
+
+def setup_keyboard_listener():
+    """Setup non-blocking keyboard listener for menu access"""
+    try:
+        from pynput import keyboard
+        
+        def on_press(key):
+            """Handle key presses"""
+            try:
+                # Check for F1
+                if key == keyboard.Key.f1:
+                    pause_for_menu.set()
+                    return
+            except AttributeError:
+                pass
+            
+            # Check for M key (English and Russian)
+            try:
+                if hasattr(key, 'char') and key.char:
+                    char_lower = key.char.lower()
+                    # 'm' in English or 'ь' in Russian layout
+                    if char_lower in ('m', 'ь'):
+                        pause_for_menu.set()
+            except AttributeError:
+                pass
+        
+        # Start listener in daemon thread
+        listener = keyboard.Listener(on_press=on_press, suppress=False)
+        listener.daemon = True
+        listener.start()
+        return True
+    except ImportError:
+        console.print("[yellow]pynput not installed. Runtime menu access disabled.[/yellow]")
+        console.print("[dim]Install with: pip install pynput[/dim]")
+        return False
+
+
+def load_history() -> List[Dict[str, str]]:
+    """
+    Load commentary history from the history file.
+    
+    Returns:
+        List of history entries with timestamp and comment fields.
+    """
+    if HISTORY_FILE.exists():
+        try:
+            with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError) as e:
+            logging.warning(f"Failed to load history: {e}")
+            return []
+    return []
+
+
+def save_history(history: List[Dict[str, str]]) -> None:
+    """
+    Save commentary history to the history file.
+    
+    Args:
+        history: List of history entries to save.
+    """
+    try:
+        with open(HISTORY_FILE, 'w', encoding='utf-8') as f:
+            json.dump(history, f, ensure_ascii=False, indent=4)
+    except IOError as e:
+        logging.error(f"Failed to save history: {e}")
+
+
+def sleep_until_next(iteration_start: float, interval_seconds: float, event: threading.Event = None) -> bool:
+    """
+    Sleep until the next iteration should begin, interruptible by event.
+    
+    Args:
+        iteration_start: Monotonic timestamp when the iteration started.
+        interval_seconds: Target interval between iterations.
+        event: Optional threading event to interrupt sleep.
+        
+    Returns:
+        True if interrupted by event, False if timeout completed.
+    """
+    elapsed = time.monotonic() - iteration_start
+    sleep_time = max(0, interval_seconds - elapsed)
+    if sleep_time > 0:
+        if event:
+            return event.wait(sleep_time)
+        else:
+            time.sleep(sleep_time)
+            return False
+    return False
+
+
+def display_comment(comment: str, now_str: str, is_cached: bool = False) -> None:
+    """
+    Display a comment in a formatted panel.
+    
+    Args:
+        comment: The comment text to display.
+        now_str: Timestamp string for the panel title.
+        is_cached: Whether this comment is from cache.
+    """
+    console.rule()
+    title = f"[dim]{now_str} (cached)[/dim]" if is_cached else f"[dim]{now_str}[/dim]"
+    console.print(Panel(
+        comment,
+        title=title,
+        style="white on black",
+        border_style="bright_blue",
+        expand=False
+    ))
+
 
 def main() -> None:
     """Main application entry point."""
@@ -140,8 +260,8 @@ def main() -> None:
             # Log slow operations (>100ms)
             screenshot_time = (t1 - t0) * 1000
             hash_time = (t3 - t2) * 1000
-            if screenshot_time > 100 or hash_time > 100:
-                 logging.debug(f"Perf: Screenshot={screenshot_time:.1f}ms, Hash={hash_time:.1f}ms")
+            if screenshot_time > 0 or hash_time > 0:
+                 logging.info(f"Perf: Screenshot={screenshot_time:.1f}ms, Hash={hash_time:.1f}ms")
 
             if decision == "skip":
                 if sleep_until_next(iteration_start, config.interval_seconds, pause_for_menu):
