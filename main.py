@@ -24,7 +24,7 @@ from observer_ward.hashing import DETECTOR
 from observer_ward.api import init_apis, analyze_with_gemini, with_retry
 
 # Import new UI system
-from observer_ward.ui import run_ui_selection, run_chat_ui
+from observer_ward.ui import run_ui_selection
 
 try:
     from commentator_styles import STYLES as ALL_STYLES, list_styles
@@ -43,6 +43,7 @@ console = Console(emoji=False, force_terminal=True, color_system="truecolor")
 # Global pause flags
 pause_for_menu = threading.Event()
 pause_for_chat = threading.Event()
+chat_active = threading.Event()
 
 
 def setup_keyboard_listener():
@@ -52,6 +53,10 @@ def setup_keyboard_listener():
         
         def on_press(key):
             """Handle key presses"""
+            # Ignore keys if chat is active
+            if chat_active.is_set():
+                return
+
             try:
                 # Check for F1
                 if key == keyboard.Key.f1:
@@ -163,6 +168,16 @@ def display_comment(comment: str, now_str: str, is_cached: bool = False) -> None
     ))
 
 
+def flush_input():
+    """Flush stdin buffer to remove queued keystrokes"""
+    try:
+        import msvcrt
+        while msvcrt.kbhit():
+            msvcrt.getch()
+    except ImportError:
+        pass
+
+
 def main() -> None:
     """Main application entry point."""
     # 1. Load Config
@@ -239,43 +254,56 @@ def main() -> None:
                         console.print(f"[green]✓ Interval changed to:[/green] {interval}s")
                 console.print("[cyan]═══ Resumed ═══[/cyan]\n")
                 
+
+
             # Check for chat request
             if pause_for_chat.is_set():
                 pause_for_chat.clear()
-                console.print("\n[cyan]═══ Chat Paused ═══[/cyan]\n")
                 
-                # Pass history to chat UI
-                user_message = run_chat_ui(history)
+                # Inline Chat Mode
+                console.print("\n[cyan]═══ Chat (Type 'exit' to cancel) ═══[/cyan]")
+                chat_active.set() # Disable listener
                 
-                if user_message:
-                    console.print(f"\n[bold green]You:[/bold green] {user_message}")
-                    console.print("[dim]Analyzing screen with your message...[/dim]")
+                # Flush any pending input (like 'c' or other keys pressed before)
+                flush_input()
+                
+                try:
+                    user_message = console.input("[bold green]You:[/bold green] ")
                     
-                    # Take fresh screenshot for chat context
-                    chat_screenshot = screenshotter.take_screenshot(
-                        monitor_index=config.screenshot_monitor_index,
-                        width=config.screenshot_width,
-                        height=config.screenshot_height
-                    )
-                    
-                    if chat_screenshot:
-                        comment = with_retry(
-                            lambda: analyze_with_gemini(
-                                model,
-                                chat_screenshot,
-                                config,
-                                style_prompt=style_prompt,
-                                history=history,
-                                user_message=user_message
-                            ),
-                            config
+                    if user_message and user_message.lower() != 'exit':
+                        console.print("[dim]Analyzing screen with your message...[/dim]")
+                        
+                        # Take fresh screenshot for chat context
+                        chat_screenshot = screenshotter.take_screenshot(
+                            monitor_index=config.screenshot_monitor_index,
+                            width=config.screenshot_width,
+                            height=config.screenshot_height
                         )
                         
-                        if comment:
-                            display_comment(comment, datetime.now().strftime("%H:%M:%S"), is_cached=False)
-                            DETECTOR.cache_set(comment, config.cache_ttl_seconds, config.disable_cache)
-                            history.append({"timestamp": datetime.now().strftime("%H:%M:%S"), "comment": comment})
-                            save_history(history)
+                        if chat_screenshot:
+                            comment = with_retry(
+                                lambda: analyze_with_gemini(
+                                    model,
+                                    chat_screenshot,
+                                    config,
+                                    style_prompt=style_prompt,
+                                    history=history,
+                                    user_message=user_message
+                                ),
+                                config
+                            )
+                            
+                            if comment:
+                                display_comment(comment, datetime.now().strftime("%H:%M:%S"), is_cached=False)
+                                DETECTOR.cache_set(comment, config.cache_ttl_seconds, config.disable_cache)
+                                history.append({"timestamp": datetime.now().strftime("%H:%M:%S"), "comment": comment})
+                                save_history(history)
+                except Exception as e:
+                    console.print(f"[red]Input error: {e}[/red]")
+                finally:
+                    chat_active.clear() # Re-enable listener
+                    # Clear any buffered events that happened during chat
+                    pause_for_chat.clear()
                 
                 console.print("[cyan]═══ Resumed ═══[/cyan]\n")
             
