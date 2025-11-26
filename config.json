@@ -33,5 +33,11 @@
     "errors_dir": "errors",
     "log_every_n_calls": 5,
     "menu_default_interval": 10,
-    "menu_default_style": "1"
+    "menu_default_style": "1",
+    "subtitle_font_family": "Helvetica",
+    "subtitle_font_size_percent": 100,
+    "subtitle_color": "white",
+    "subtitle_past_color": "#cccccc",
+    "subtitle_bg_color": "black",
+    "subtitle_bg_opacity": 0
 }

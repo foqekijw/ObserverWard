@@ -57,6 +57,14 @@ class AppConfig:
     # UI Defaults
     menu_default_interval: int = 10
     menu_default_style: str = "1"
+    
+    # Subtitle Settings
+    subtitle_font_family: str = "Helvetica"
+    subtitle_font_size_percent: int = 100 # Percent of base size (14pt)
+    subtitle_color: str = "white"
+    subtitle_past_color: str = "#cccccc"
+    subtitle_bg_color: str = "black"
+    subtitle_bg_opacity: int = 0 # 0-100 percent
 
     @classmethod
     def load(cls, path: Path) -> "AppConfig":
