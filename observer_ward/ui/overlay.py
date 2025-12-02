@@ -5,8 +5,9 @@ import queue
 import time
 
 class Overlay:
-    def __init__(self, config):
+    def __init__(self, config, api_key_callback=None):
         self.config = config
+        self.api_key_callback = api_key_callback
         self.root = tk.Tk()
         self.root.title("Observer Ward Overlay")
         
@@ -68,6 +69,17 @@ class Overlay:
         
         # Message labels will be recreated on update
         self.message_labels = []
+
+        # Hotkey Hint (Bottom Right)
+        self.hint_label = tk.Label(
+            self.root,
+            text="Ctrl+Alt+C: Chat  |  Ctrl+Alt+X: Menu",
+            font=("Segoe UI", 10),
+            bg=self.transparent_color,
+            fg="#888888",
+            justify=tk.RIGHT
+        )
+        self.hint_label.place(relx=0.98, rely=0.98, anchor=tk.SE)
         
         # Input field (hidden by default)
         self.input_frame = tk.Frame(self.root, bg="#1a1a1a") # Dark grey background
@@ -234,12 +246,91 @@ class Overlay:
         
         # Header
         header = tk.Label(settings_win, text="Overlay Settings", font=("Segoe UI", 16, "bold"), bg=bg_color, fg=fg_color)
-        header.pack(pady=(20, 20))
+        header.pack(pady=(20, 10))
         
-        # Content Frame
-        content = tk.Frame(settings_win, bg=bg_color)
-        content.pack(fill=tk.BOTH, expand=True, padx=30)
+        # Create a Canvas with Scrollbar for scrollable content
+        canvas_frame = tk.Frame(settings_win, bg=bg_color)
+        canvas_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
         
+        canvas = tk.Canvas(canvas_frame, bg=bg_color, highlightthickness=0)
+        scrollbar = tk.Scrollbar(canvas_frame, orient="vertical", command=canvas.yview)
+        scrollable_frame = tk.Frame(canvas, bg=bg_color)
+        
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Enable mousewheel scrolling
+        def on_mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        canvas.bind_all("<MouseWheel>", on_mousewheel)
+        
+        # Content Frame (now inside scrollable_frame)
+        content = tk.Frame(scrollable_frame, bg=bg_color)
+        content.pack(fill=tk.BOTH, expand=True, padx=20, pady=(10, 20))
+        
+        # --- API Key ---
+        tk.Label(content, text="Gemini API Key", font=("Segoe UI", 12), bg=bg_color, fg="#aaaaaa").pack(anchor="w", pady=(0, 5))
+        
+        import os
+        current_key = os.getenv("GEMINI_API_KEY", "")
+        api_key_var = tk.StringVar(value=current_key)
+        
+        api_key_entry = tk.Entry(
+            content,
+            textvariable=api_key_var,
+            font=("Segoe UI", 11),
+            bg="#333333",
+            fg="white",
+            insertbackground="white",
+            relief=tk.FLAT,
+            show="*" # Mask the key
+        )
+        api_key_entry.pack(fill=tk.X, pady=(0, 15), ipady=5)
+        
+        # Toggle visibility
+        show_key_var = tk.BooleanVar(value=False)
+        def toggle_key():
+            if show_key_var.get():
+                api_key_entry.config(show="")
+            else:
+                api_key_entry.config(show="*")
+                
+        tk.Checkbutton(
+            content, 
+            text="Show API Key", 
+            variable=show_key_var, 
+            command=toggle_key,
+            bg=bg_color, 
+            fg="#aaaaaa", 
+            selectcolor="#333333",
+            activebackground=bg_color,
+            activeforeground="#aaaaaa",
+            font=("Segoe UI", 9)
+        ).pack(anchor="w", pady=(0, 15))
+
+        # --- Only On Change ---
+        tk.Label(content, text="Generation Behavior", font=("Segoe UI", 12), bg=bg_color, fg="#aaaaaa").pack(anchor="w", pady=(0, 5))
+        only_change_var = tk.BooleanVar(value=self.config.only_on_change)
+        tk.Checkbutton(
+            content, 
+            text="Only Generate on Screen Change", 
+            variable=only_change_var, 
+            bg=bg_color, 
+            fg="white", 
+            selectcolor="#333333",
+            activebackground=bg_color,
+            activeforeground="white",
+            font=("Segoe UI", 10)
+        ).pack(anchor="w", pady=(0, 15))
+
         # --- Font Family ---
         tk.Label(content, text="Font Family", font=("Segoe UI", 12), bg=bg_color, fg="#aaaaaa").pack(anchor="w", pady=(0, 5))
         font_var = tk.StringVar(value=self.config.subtitle_font_family)
@@ -322,6 +413,51 @@ class Overlay:
         )
         opacity_scale.pack(fill=tk.X, pady=(0, 20))
 
+        # --- Context Settings ---
+        tk.Label(content, text="Context & Behavior", font=("Segoe UI", 12), bg=bg_color, fg="#aaaaaa").pack(anchor="w", pady=(0, 5))
+        
+        # History Context
+        history_ctx_var = tk.BooleanVar(value=getattr(self.config, 'use_history_context', True))
+        tk.Checkbutton(
+            content, 
+            text="Use History Context (Avoid Repetition)", 
+            variable=history_ctx_var, 
+            bg=bg_color, 
+            fg="white", 
+            selectcolor="#333333",
+            activebackground=bg_color,
+            activeforeground="white",
+            font=("Segoe UI", 10)
+        ).pack(anchor="w", pady=(0, 5))
+
+        # Anti-Repetition
+        anti_rep_var = tk.BooleanVar(value=getattr(self.config, 'use_anti_repetition', True))
+        tk.Checkbutton(
+            content, 
+            text="Strict Anti-Repetition Mode", 
+            variable=anti_rep_var, 
+            bg=bg_color, 
+            fg="white", 
+            selectcolor="#333333",
+            activebackground=bg_color,
+            activeforeground="white",
+            font=("Segoe UI", 10)
+        ).pack(anchor="w", pady=(0, 5))
+
+        # Persona Context
+        persona_ctx_var = tk.BooleanVar(value=getattr(self.config, 'use_persona_context', True))
+        tk.Checkbutton(
+            content, 
+            text="Use Persona Context (Mood/Memory)", 
+            variable=persona_ctx_var, 
+            bg=bg_color, 
+            fg="white", 
+            selectcolor="#333333",
+            activebackground=bg_color,
+            activeforeground="white",
+            font=("Segoe UI", 10)
+        ).pack(anchor="w", pady=(0, 20))
+
         # --- Save Button ---
         def save():
             self.config.subtitle_font_family = font_var.get()
@@ -330,11 +466,23 @@ class Overlay:
             self.config.subtitle_past_color = past_color_var.get()
             self.config.subtitle_bg_color = bg_color_var.get()
             self.config.subtitle_bg_opacity = opacity_var.get()
+            self.config.only_on_change = only_change_var.get()
+            
+            # Save new settings
+            self.config.use_history_context = history_ctx_var.get()
+            self.config.use_anti_repetition = anti_rep_var.get()
+            self.config.use_persona_context = persona_ctx_var.get()
             
             # Update font
             base_size = 14
             size = int(base_size * (self.config.subtitle_font_size_percent / 100))
             self.text_font.configure(family=self.config.subtitle_font_family, size=size)
+            
+            # Check API Key change
+            new_key = api_key_var.get().strip()
+            if new_key != current_key and self.api_key_callback:
+                # Run callback in a separate thread to avoid freezing UI
+                threading.Thread(target=self.api_key_callback, args=(new_key,)).start()
             
             # Refresh UI
             self._refresh_messages()

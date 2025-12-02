@@ -1,0 +1,17 @@
+{
+    "sessions": [
+        {
+            "date": "2025-11-29 19:12",
+            "duration_minutes": 5,
+            "comment_count": 5,
+            "final_mood": "bored"
+        },
+        {
+            "date": "2025-11-29 19:37",
+            "duration_minutes": 0,
+            "comment_count": 0,
+            "final_mood": "neutral"
+        }
+    ],
+    "total_comments": 308
+}

@@ -7,7 +7,7 @@
     "hash_method": "phash",
     "hash_threshold": 7,
     "stable_window_seconds": 60,
-    "only_on_change": true,
+    "only_on_change": false,
     "cache_ttl_seconds": 45,
     "disable_cache": true,
     "minute_limit": 8,
@@ -19,9 +19,9 @@
     "disable_retries": false,
     "response_format": "comment_only",
     "details_use_style": true,
-    "strict_interval": true,
+    "strict_interval": false,
     "silent_mode": false,
-    "temperature": 1,
+    "temperature": 2,
     "timeout_ms": 30000,
     "max_output_tokens": 1024,
     "response_modalities": [
@@ -39,5 +39,8 @@
     "subtitle_color": "white",
     "subtitle_past_color": "#cccccc",
     "subtitle_bg_color": "black",
-    "subtitle_bg_opacity": 0
+    "subtitle_bg_opacity": 0,
+    "use_history_context": true,
+    "use_anti_repetition": true,
+    "use_persona_context": true
 }

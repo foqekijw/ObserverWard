@@ -52,11 +52,14 @@ class ChangeDetector:
         if self.last_api_result and now_m < self.cache_expire_monotonic:
             return "use_cache"
             
-        if only_on_change and self.last_change_monotonic is not None:
-            if (now_m - self.last_change_monotonic) >= stable_window:
-                return "skip"
-                
-        return "skip"
+        if only_on_change:
+            if self.last_change_monotonic is not None:
+                if (now_m - self.last_change_monotonic) >= stable_window:
+                    return "skip"
+            return "skip"
+            
+        # If only_on_change is False, we generate even if no change (after cache check)
+        return "call"
 
     def cache_set(self, result: Any, ttl: int, disable_cache: bool) -> None:
         if disable_cache:

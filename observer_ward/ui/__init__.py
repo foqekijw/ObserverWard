@@ -48,6 +48,7 @@ def run_ui_selection(
             ("4", "Screenshot Width", "screenshot_width", int),
             ("5", "Screenshot Height", "screenshot_height", int),
             ("6", "Monitor Index", "screenshot_monitor_index", int),
+            ("7", "Only On Change", "only_on_change", bool),
         ],
         config=config
     )

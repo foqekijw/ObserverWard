@@ -1,0 +1,13 @@
+[
+  {
+    "name": "analysis_concise",
+    "version": "2.0",
+    "description": "Shorter analysis template for reduced token usage",
+    "sections": {
+      "persona": "PERSONA: {persona_instruction}",
+      "task": "Analyze this image. Focus on what's NEW compared to before. Be creative and vary your style.",
+      "history": "Previous: {history_display}",
+      "output_format": "OUTPUT: JSON with: comment, mood_update, intensity"
+    }
+  }
+]

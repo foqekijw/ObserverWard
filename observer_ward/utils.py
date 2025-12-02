@@ -8,7 +8,7 @@ from PIL import Image
 def setup_logging(log_path: Path) -> logging.Logger:
     """Configures and returns the logger."""
     logger = logging.getLogger("ai_commentator")
-    logger.setLevel(logging.INFO)
+    logger.setLevel(logging.DEBUG)  # Changed from INFO to DEBUG for prompt visibility
     
     # Remove existing handlers to avoid duplication
     if logger.hasHandlers():
@@ -18,6 +18,7 @@ def setup_logging(log_path: Path) -> logging.Logger:
     
     # File handler
     try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
         file_handler = logging.FileHandler(str(log_path), encoding='utf-8')
         file_handler.setFormatter(formatter)
         logger.addHandler(file_handler)

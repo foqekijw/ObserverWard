@@ -1,4 +1,5 @@
 import sys
+import os
 import time
 import json
 import logging
@@ -26,17 +27,30 @@ from observer_ward.api import init_apis, analyze_with_gemini, with_retry
 # Import new UI system
 from observer_ward.ui import run_ui_selection
 from observer_ward.ui.overlay import Overlay
+from observer_ward.persona import PersonaManager
 
-try:
-    from commentator_styles import STYLES as ALL_STYLES, list_styles
-except ImportError:
-    print("commentator_styles.py not found! Styles unavailable.")
-    ALL_STYLES = {}
-    list_styles = lambda: []
+# Load Styles from JSON
+STYLES_FILE = Path(__file__).parent / "styles.json"
+
+def load_styles() -> Dict[str, str]:
+    if STYLES_FILE.exists():
+        try:
+            with open(STYLES_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"Failed to load styles.json: {e}")
+    return {}
+
+ALL_STYLES = load_styles()
+
+def list_styles() -> List[str]:
+    return list(ALL_STYLES.keys())
 
 # Constants
-HISTORY_FILE = Path(__file__).parent.resolve() / ".ai_commentator_history.json"
-CONFIG_FILE = Path(__file__).parent / "config.json"
+# Constants
+# We are now in observer_ward package, so root is parent.parent
+HISTORY_FILE = Path(__file__).parent.parent.resolve() / ".ai_commentator_history.json"
+CONFIG_FILE = Path(__file__).parent.parent.resolve() / "config.json"
 
 # Console for application output
 console = Console(emoji=False, force_terminal=True, color_system="truecolor")
@@ -45,22 +59,43 @@ console = Console(emoji=False, force_terminal=True, color_system="truecolor")
 pause_for_menu = threading.Event()
 pause_for_chat = threading.Event()
 chat_active = threading.Event()
+interrupt_event = threading.Event()  # Master event for waking up sleeping threads
+
+
+
+class ModelContainer:
+    """Thread-safe container for the Gemini model to allow runtime reloading."""
+    def __init__(self, model):
+        self.model = model
+        self._lock = threading.Lock()
+
+    def update(self, model):
+        with self._lock:
+            self.model = model
+
+    def get(self):
+        with self._lock:
+            return self.model
 
 
 def setup_keyboard_listener():
     """Sets up global hotkeys for menu and chat."""
     def on_menu():
+        console.print("[bold magenta]Hotkey Detected: Menu[/bold magenta]")
         pause_for_menu.set()
+        interrupt_event.set()
         
     def on_chat():
+        console.print("[bold magenta]Hotkey Detected: Chat[/bold magenta]")
         pause_for_chat.set()
+        interrupt_event.set()
 
     # Use GlobalHotKeys for reliable modifier handling
     try:
         from pynput import keyboard
-        # Define hotkeys: <ctrl>+<alt>+m for Menu, <ctrl>+<alt>+c for Chat
+        # Define hotkeys: <ctrl>+<alt>+x for Menu, <ctrl>+<alt>+c for Chat
         hotkeys = keyboard.GlobalHotKeys({
-            '<ctrl>+<alt>+m': on_menu,
+            '<ctrl>+<alt>+x': on_menu,
             '<ctrl>+<alt>+c': on_chat
         })
         hotkeys.start()
@@ -95,38 +130,38 @@ def save_history(history: List[Dict[str, str]]) -> None:
         history: List of history entries to save.
     """
     try:
+        # Limit history to last 50 entries to keep file compact
+        history = history[-50:]
         with open(HISTORY_FILE, 'w', encoding='utf-8') as f:
             json.dump(history, f, ensure_ascii=False, indent=4)
     except IOError as e:
         logging.error(f"Failed to save history: {e}")
 
 
-def sleep_until_next(iteration_start: float, interval_seconds: float, events: List[threading.Event] = None) -> bool:
+def sleep_until_next(iteration_start: float, interval_seconds: float, interrupt_event: threading.Event = None) -> bool:
     """
-    Sleep until the next iteration should begin, interruptible by events.
+    Sleep until the next iteration should begin, interruptible by a master event.
     
     Args:
         iteration_start: Monotonic timestamp when the iteration started.
         interval_seconds: Target interval between iterations.
-        events: Optional list of threading events to interrupt sleep.
+        interrupt_event: Master event that signals wake-up (replaces polling list).
         
     Returns:
         True if interrupted by event, False if timeout completed.
     """
     elapsed = time.monotonic() - iteration_start
-    sleep_time = max(0, interval_seconds - elapsed)
-    if sleep_time > 0:
-        if events:
-            # Check events periodically to allow interruption
-            start_sleep = time.monotonic()
-            while time.monotonic() - start_sleep < sleep_time:
-                for event in events:
-                    if event.is_set():
-                        return True
-                time.sleep(0.05)
+    timeout = max(0, interval_seconds - elapsed)
+    
+    if timeout > 0:
+        if interrupt_event:
+            # Efficient wait using OS primitives instead of polling
+            if interrupt_event.wait(timeout):
+                interrupt_event.clear()  # Clear immediately to prevent busy loop
+                return True
             return False
         else:
-            time.sleep(sleep_time)
+            time.sleep(timeout)
             return False
     return False
 
@@ -161,7 +196,7 @@ def flush_input():
         pass
 
 
-def observer_loop(overlay, config, model, style_prompt, history):
+def observer_loop(overlay, config, model_container, style_prompt, history, persona_manager):
     """Background loop for screen analysis"""
     # Initialize Screenshotter
     screenshotter = Screenshotter()
@@ -189,22 +224,28 @@ def observer_loop(overlay, config, model, style_prompt, history):
                     console.print(f"[dim]Chat: {message}[/dim]")
                     
                     # Take fresh screenshot for chat context
-                    chat_screenshot = screenshotter.take_screenshot(
-                        monitor_index=config.screenshot_monitor_index,
-                        width=config.screenshot_width,
-                        height=config.screenshot_height
-                    )
+                    # Use a new Screenshotter instance to avoid thread conflicts with the main loop
+                    chat_screenshotter = Screenshotter()
+                    try:
+                        chat_screenshot = chat_screenshotter.take_screenshot(
+                            monitor_index=config.screenshot_monitor_index,
+                            width=config.screenshot_width,
+                            height=config.screenshot_height
+                        )
+                    finally:
+                        chat_screenshotter.close()
                     
                     if chat_screenshot:
                         # Run analysis directly (we are already in a background thread)
                         comment = with_retry(
                             lambda: analyze_with_gemini(
-                                model,
+                                model_container.get(),
                                 chat_screenshot,
                                 config,
                                 style_prompt=style_prompt,
                                 history=history,
-                                user_message=message
+                                user_message=message,
+                                persona_manager=persona_manager
                             ),
                             config
                         )
@@ -217,6 +258,9 @@ def observer_loop(overlay, config, model, style_prompt, history):
                             DETECTOR.cache_set(comment, config.cache_ttl_seconds, config.disable_cache)
                             history.append({"timestamp": datetime.now().strftime("%H:%M:%S"), "comment": comment})
                             save_history(history)
+                        else:
+                            console.print("[red]Failed to generate chat response.[/red]")
+                            overlay.display_comment("Error: Could not generate response.")
 
                 # Show input on overlay
                 overlay.show_input(on_chat_submit)
@@ -235,7 +279,7 @@ def observer_loop(overlay, config, model, style_prompt, history):
             t1 = time.monotonic()
             
             if not screenshot:
-                if sleep_until_next(iteration_start, config.interval_seconds, [pause_for_menu, pause_for_chat]):
+                if sleep_until_next(iteration_start, config.interval_seconds, interrupt_event):
                     continue
                 continue
 
@@ -252,7 +296,7 @@ def observer_loop(overlay, config, model, style_prompt, history):
                  logging.info(f"Perf: Screenshot={screenshot_time:.1f}ms, Hash={hash_time:.1f}ms")
 
             if decision == "skip":
-                if sleep_until_next(iteration_start, config.interval_seconds, [pause_for_menu, pause_for_chat]):
+                if sleep_until_next(iteration_start, config.interval_seconds, interrupt_event):
                     continue
                 continue
 
@@ -261,7 +305,7 @@ def observer_loop(overlay, config, model, style_prompt, history):
                 if cached:
                     overlay.display_comment(cached)
                     display_comment(cached, now_str, is_cached=True)
-                    if sleep_until_next(iteration_start, config.interval_seconds, [pause_for_menu, pause_for_chat]):
+                    if sleep_until_next(iteration_start, config.interval_seconds, interrupt_event):
                         continue
                     continue
 
@@ -270,11 +314,12 @@ def observer_loop(overlay, config, model, style_prompt, history):
                 
                 comment = with_retry(
                     lambda: analyze_with_gemini(
-                        model,
+                        model_container.get(),
                         screenshot,
                         config,
                         style_prompt=style_prompt,
-                        history=history
+                        history=history,
+                        persona_manager=persona_manager
                     ),
                     config
                 )
@@ -291,7 +336,7 @@ def observer_loop(overlay, config, model, style_prompt, history):
                     save_history(history)
 
             # Sleep at end of loop
-            if sleep_until_next(iteration_start, config.interval_seconds, [pause_for_menu, pause_for_chat]):
+            if sleep_until_next(iteration_start, config.interval_seconds, interrupt_event):
                 continue
                 
     except Exception as e:
@@ -313,10 +358,53 @@ def main() -> None:
     
     # 3. Init API
     model = init_apis(config)
+    # We allow starting without a model now, so user can set key in settings
     if not model:
-        console.print("[red]Failed to initialize Gemini API. Check API Key.[/red]")
-        return
+        console.print("[yellow]Gemini API not initialized. Please set API Key in Settings (Ctrl+Alt+M).[/yellow]")
     
+    model_container = ModelContainer(model)
+
+    def reload_model(new_key: str):
+        """Updates API key and reloads the model."""
+        try:
+            # 1. Update .env file
+            env_path = Path(".env")
+            lines = []
+            if env_path.exists():
+                with open(env_path, "r", encoding="utf-8") as f:
+                    lines = f.readlines()
+            
+            key_found = False
+            new_lines = []
+            for line in lines:
+                if line.startswith("GEMINI_API_KEY="):
+                    new_lines.append(f"GEMINI_API_KEY={new_key}\n")
+                    key_found = True
+                else:
+                    new_lines.append(line)
+            
+            if not key_found:
+                new_lines.append(f"GEMINI_API_KEY={new_key}\n")
+                
+            with open(env_path, "w", encoding="utf-8") as f:
+                f.writelines(new_lines)
+            
+            # 2. Update Environment Variable
+            os.environ["GEMINI_API_KEY"] = new_key
+            
+            # 3. Re-init API
+            new_model = init_apis(config)
+            if new_model:
+                model_container.update(new_model)
+                console.print("[green]API Key updated and model reloaded successfully![/green]")
+                return True
+            else:
+                console.print("[red]Failed to initialize model with new key.[/red]")
+                return False
+        except Exception as e:
+            console.print(f"[red]Error updating API key: {e}[/red]")
+            return False
+
     # 4. Setup keyboard listener for runtime menu access
     has_menu_hotkey = setup_keyboard_listener()
     
@@ -344,7 +432,7 @@ def main() -> None:
     console.print(f"\n[green]Selected Style:[/green] {style_name}")
     console.print(f"[green]Interval:[/green] {interval}s")
     if has_menu_hotkey:
-        console.print("[dim]Press M to open menu  |  Press C to chat  |  Ctrl+C to stop[/dim]\n")
+        console.print("[dim]Ctrl+Alt+X: Menu  |  Ctrl+Alt+C: Chat  |  Ctrl+C: Stop[/dim]\n")
     else:
         console.print("[dim]Press Ctrl+C to stop[/dim]\n")
     
@@ -354,13 +442,16 @@ def main() -> None:
     
     history = load_history()
     
+    # Initialize Persona Manager
+    persona_manager = PersonaManager(HISTORY_FILE)
+    
     # Initialize Overlay
-    overlay = Overlay(config)
+    overlay = Overlay(config, api_key_callback=reload_model)
 
     # Start observer loop in background thread
     observer_thread = threading.Thread(
         target=observer_loop,
-        args=(overlay, config, model, style_prompt, history),
+        args=(overlay, config, model_container, style_prompt, history, persona_manager),
         daemon=True
     )
     observer_thread.start()
@@ -375,6 +466,10 @@ def main() -> None:
     except Exception as e:
         console.print(f"\n[red]Critical Error: {e}[/red]")
         logging.exception("Critical error in main")
+    finally:
+        if 'persona_manager' in locals():
+            persona_manager.end_session()
+            console.print("[dim]Session saved to memory.[/dim]")
 
 if __name__ == "__main__":
     main()

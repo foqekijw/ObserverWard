@@ -1,11 +1,9 @@
 """
 Style Persistence Module
 
-Handles reading and writing styles to commentator_styles.py
-using AST parsing for safe file manipulation.
+Handles reading and writing styles to styles.json.
 """
 
-import ast
 import json
 import logging
 from pathlib import Path
@@ -13,41 +11,49 @@ from typing import Dict, Optional
 
 
 class StylePersistence:
-    """Manager for loading and saving styles to the styles file."""
+    """Manager for loading and saving styles to the JSON file."""
     
     def __init__(self, styles_file: Path):
         """
         Initialize the persistence manager.
         
         Args:
-            styles_file: Path to commentator_styles.py
+            styles_file: Path to styles.json
         """
         self.styles_file = styles_file
     
     def load_styles(self) -> Dict[str, Dict[str, str]]:
         """
-        Load styles from the Python file.
+        Load styles from the JSON file.
         
         Returns:
             Dictionary of styles {style_name: {"role": "system", "content": "..."}}
+            Note: The JSON file stores simple key-value pairs, so we convert them
+            to the expected format for compatibility.
         """
         try:
+            if not self.styles_file.exists():
+                logging.warning(f"Styles file not found: {self.styles_file}")
+                return {}
+
             with open(self.styles_file, 'r', encoding='utf-8') as f:
-                content = f.read()
+                raw_styles = json.load(f)
             
-            # Parse the file as AST
-            tree = ast.parse(content)
+            # Convert simple key-value to detailed format if needed by UI
+            # The UI expects {name: {"role": "system", "content": "..."}}
+            detailed_styles = {}
+            for name, content in raw_styles.items():
+                if isinstance(content, dict):
+                    # Already in detailed format (unlikely with new json, but safe)
+                    detailed_styles[name] = content
+                else:
+                    # Convert string to detailed format
+                    detailed_styles[name] = {
+                        "role": "system",
+                        "content": content
+                    }
             
-            # Find STYLES assignment
-            for node in ast.walk(tree):
-                if isinstance(node, ast.Assign):
-                    for target in node.targets:
-                        if isinstance(target, ast.Name) and target.id == 'STYLES':
-                            # Found STYLES dict, evaluate it
-                            return self._extract_dict_from_node(node.value)
-            
-            logging.warning("STYLES dict not found in file")
-            return {}
+            return detailed_styles
             
         except Exception as e:
             logging.error(f"Failed to load styles: {e}")
@@ -55,56 +61,25 @@ class StylePersistence:
     
     def save_styles(self, styles: Dict[str, Dict[str, str]]) -> bool:
         """
-        Save styles back to the Python file.
+        Save styles back to the JSON file.
         
         Args:
-            styles: Dictionary of styles to save
+            styles: Dictionary of styles in detailed format
             
         Returns:
             True if successful, False otherwise
         """
         try:
-            # Read current file to preserve structure
-            with open(self.styles_file, 'r', encoding='utf-8') as f:
-                lines = f.readlines()
+            # Convert detailed format back to simple key-value for JSON
+            simple_styles = {}
+            for name, data in styles.items():
+                if isinstance(data, dict):
+                    simple_styles[name] = data.get("content", "")
+                else:
+                    simple_styles[name] = str(data)
             
-            # Find STYLES dict start and end
-            start_idx = None
-            end_idx = None
-            brace_count = 0
-            in_styles = False
-            
-            for i, line in enumerate(lines):
-                if 'STYLES = {' in line or 'STYLES={' in line:
-                    start_idx = i
-                    in_styles = True
-                    brace_count = line.count('{') - line.count('}')
-                    if brace_count == 0:
-                        end_idx = i
-                        break
-                elif in_styles:
-                    brace_count += line.count('{') - line.count('}')
-                    if brace_count == 0:
-                        end_idx = i
-                        break
-            
-            if start_idx is None:
-                logging.error("Could not find STYLES dict in file")
-                return False
-            
-            # Generate new STYLES dict
-            new_styles_text = self._generate_styles_dict(styles)
-            
-            # Replace the section
-            new_lines = (
-                lines[:start_idx] +
-                [new_styles_text] +
-                lines[end_idx + 1:]
-            )
-            
-            # Write back to file
             with open(self.styles_file, 'w', encoding='utf-8') as f:
-                f.writelines(new_lines)
+                json.dump(simple_styles, f, ensure_ascii=False, indent=4)
             
             return True
             
@@ -126,65 +101,14 @@ class StylePersistence:
         if not name or not name.strip():
             return "Style name cannot be empty"
         
-        if not name.replace('_', '').replace('-', '').isalnum():
-            return "Style name must be alphanumeric (underscores and hyphens allowed)"
+        # Relaxed validation for JSON keys, but keep it sane
+        if not name.replace('_', '').replace('-', '').replace(' ', '').isalnum():
+             return "Style name should be alphanumeric (spaces, underscores, hyphens allowed)"
         
         if not content or not content.strip():
             return "Style content cannot be empty"
         
         return None
-    
-    def _extract_dict_from_node(self, node) -> Dict:
-        """Extract dictionary from AST Dict node."""
-        if not isinstance(node, ast.Dict):
-            return {}
-        
-        result = {}
-        for key_node, value_node in zip(node.keys, node.values):
-            if isinstance(key_node, ast.Constant):
-                key = key_node.value
-                
-                # Handle nested dict for style structure
-                if isinstance(value_node, ast.Dict):
-                    nested = {}
-                    for nk, nv in zip(value_node.keys, value_node.values):
-                        if isinstance(nk, ast.Constant) and isinstance(nv, ast.Constant):
-                            nested[nk.value] = nv.value
-                    result[key] = nested
-        
-        return result
-    
-    def _generate_styles_dict(self, styles: Dict[str, Dict[str, str]]) -> str:
-        """
-        Generate Python code for STYLES dict.
-        
-        Args:
-            styles: Dictionary of styles
-            
-        Returns:
-            Python code as string
-        """
-        lines = ["STYLES = {\n"]
-        
-        for style_name, style_data in styles.items():
-            role = style_data.get("role", "system")
-            content = style_data.get("content", "")
-            
-            # Skip styles with empty content (deleted styles)
-            if not content or not content.strip():
-                continue
-            
-            # Escape triple quotes in content for safety
-            content_escaped = content.replace('\\', '\\\\').replace('"""', r'\"\"\"')
-            
-            lines.append(f'    "{style_name}": {{\n')
-            lines.append(f'        "role": "{role}",\n')
-            lines.append(f'        "content": """{content_escaped}"""\n')
-            lines.append(f'    }},\n')
-        
-        lines.append("}\n")
-        
-        return ''.join(lines)
     
     def load_favorites(self) -> list:
         """
@@ -263,11 +187,15 @@ class StylePersistence:
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 export_path = exports_dir / f"styles_export_{timestamp}.json"
             
-            # Prepare export data
+            # Prepare export data (using simple format for export too)
+            simple_styles = {}
+            for name, data in styles.items():
+                simple_styles[name] = data.get("content", "")
+
             export_data = {
                 "version": "1.0",
                 "export_date": datetime.now().isoformat(),
-                "styles": styles
+                "styles": simple_styles
             }
             
             # Write to file
@@ -295,18 +223,26 @@ class StylePersistence:
             with open(import_path, 'r', encoding='utf-8') as f:
                 import_data = json.load(f)
             
-            imported_styles = import_data.get("styles", {})
+            imported_simple = import_data.get("styles", {})
             
+            # Convert to detailed format
+            imported_detailed = {}
+            for name, content in imported_simple.items():
+                 imported_detailed[name] = {
+                    "role": "system",
+                    "content": content
+                }
+
             if merge:
                 # Load existing styles
                 existing = self.load_styles()
                 # Merge (skip conflicts - don't overwrite existing)
-                for name, data in imported_styles.items():
+                for name, data in imported_detailed.items():
                     if name not in existing:
                         existing[name] = data
                 return existing
             else:
-                return imported_styles
+                return imported_detailed
                 
         except Exception as e:
             logging.error(f"Failed to import styles: {e}")
@@ -387,5 +323,5 @@ class StylePersistence:
 
 
 # Global instance
-_styles_file = Path(__file__).parent.parent / "commentator_styles.py"
+_styles_file = Path(__file__).parent / "styles.json"
 STYLE_MANAGER = StylePersistence(_styles_file)

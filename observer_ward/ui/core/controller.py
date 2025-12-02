@@ -309,36 +309,31 @@ class UIController:
     def _reload_style_selection(self):
         """Reload styles from file and update selection data"""
         try:
-            # Import here to avoid circular dependency and get fresh data
-            import importlib
-            import sys
+            from ...style_persistence import STYLE_MANAGER
             
-            # Reload the commentator_styles module to get updated styles
-            if 'commentator_styles' in sys.modules:
-                commentator_styles = sys.modules['commentator_styles']
-                importlib.reload(commentator_styles)
-                list_styles_func = getattr(commentator_styles, 'list_styles', None)
+            # Reload styles from JSON
+            styles = STYLE_MANAGER.load_styles()
+            
+            if styles and self.context.selection_data:
+                # Rebuild menu_styles with key mapping
+                keys = sorted(styles.keys())
+                new_items = []
+                new_mapping = {}
                 
-                if list_styles_func and self.context.selection_data:
-                    # Rebuild menu_styles with key mapping
-                    keys = list_styles_func()
-                    new_items = []
-                    new_mapping = {}
-                    
-                    for i, k in enumerate(keys, 1):
-                        title = k.replace('_', ' ').title()
-                        numeric_key = str(i)
-                        new_items.append((numeric_key, title))
-                        new_mapping[numeric_key] = k  # Map "1" -> "actual_style_name"
-                    
-                    # Update selection data
-                    self.context.selection_data.items = new_items
-                    # Update key mapping
-                    self.context.style_key_mapping = new_mapping
-                    
-                    # Keep selected index valid
-                    if self.context.selection_data.selected_index >= len(new_items):
-                        self.context.selection_data.selected_index = max(0, len(new_items) - 1)
+                for i, k in enumerate(keys, 1):
+                    title = k.replace('_', ' ').title()
+                    numeric_key = str(i)
+                    new_items.append((numeric_key, title))
+                    new_mapping[numeric_key] = k  # Map "1" -> "actual_style_name"
+                
+                # Update selection data
+                self.context.selection_data.items = new_items
+                # Update key mapping
+                self.context.style_key_mapping = new_mapping
+                
+                # Keep selected index valid
+                if self.context.selection_data.selected_index >= len(new_items):
+                    self.context.selection_data.selected_index = max(0, len(new_items) - 1)
         except Exception as e:
             import logging
             logging.error(f"Failed to reload styles: {e}")

@@ -42,7 +42,7 @@ class AppConfig:
     silent_mode: bool = False
     
     # Gemini Generation Config
-    temperature: float = 0.7
+    temperature: float = 0.9
     timeout_ms: int = 30000
     max_output_tokens: int = 1024
     response_modalities: List[str] = field(default_factory=lambda: ["text"])
@@ -50,8 +50,8 @@ class AppConfig:
     
     # Paths & Logging
     history_path: str = ".ai_commentator_history.json"
-    log_path: str = "ai_commentator.log"
-    errors_dir: str = "errors"
+    log_path: str = "logs/ai_commentator.log"
+    errors_dir: str = "logs/errors"
     log_every_n_calls: int = 5
     
     # UI Defaults
@@ -65,6 +65,11 @@ class AppConfig:
     subtitle_past_color: str = "#cccccc"
     subtitle_bg_color: str = "black"
     subtitle_bg_opacity: int = 0 # 0-100 percent
+
+    # Context & Behavior Settings
+    use_history_context: bool = True
+    use_anti_repetition: bool = True
+    use_persona_context: bool = True
 
     @classmethod
     def load(cls, path: Path) -> "AppConfig":
